@@ -1,51 +1,197 @@
-db_all<-readRDS("/Users/AlexAkimenko/Documents/работа/OSM model/MR.rds")
-MR_connect<-db_all[db_all$workgroup=="MR"  & db_all$OutboundConnected==1 & db_all$account_number!="" & as.Date(db_all$EventDateTime)>as.Date("2016/2/11"),]
+library(data.table)
+
+### PARAMETERS ###
+
+# this needs to be changed in case of new user
+path<-"/Users/AlexAkimenko/Documents/работа/Citi/OSM_model/" # current working directory
+
+### LOAD DATA ####
+
+MR<-readRDS(paste0(path,"/1_data/MR.rds"))
 
 
-X<-data.frame(n_attempt=MR_connect$n_attempt,
-              n_attempt_s_phone=MR_connect$n_attempt_s_phone,
-              #time_last_att=MR_connect$time_last_att,
-              #time_last_att_s_phone=MR_connect$time_last_att_s_phone,
-              hour=as.integer(MR_connect$hour),
-              phone_type=as.factor(MR_connect$phone_type),
-              mode=as.factor(MR_connect$DialModeDesc),
-              ListName=as.factor(MR_connect$ListName),
-              #weekday=as.factor(MR_connect$weekday),
-              act_date=MR_connect$act_date)   
+### CONTACT (WPC+RPC) MODEL ####
 
-y<-MR_connect$RPC==1
+X<-data.frame(#n_attempt=MR$n_attempt,
+              n_attempt_s_phone=MR$n_attempt_s_phone,
+              connect_pred=MR$connect_pred,
+              #time_last_att=MR$time_last_att,
+              #time_last_att_s_phone=MR$time_last_att_s_phone,
+              #hour=as.integer(MR$hour),
+              phone_type=as.factor(MR$phone_type),
+              mode=as.factor(MR$DialModeDesc),
+              weekday=as.factor(MR$weekday),
+              ListName=as.factor(MR$ListName))   
+
+y<-MR$Contact==1
 set.seed(1)
 sample_flag<-sample(1:nrow(X),nrow(X)*0.7)
 
 X_train <- X[sample_flag,]
-X_test<-X[-sample_flag,]
+#X_test<-X[-sample_flag,]
 y_train<-y[sample_flag]
-y_test<-y[-sample_flag]
+#y_test<-y[-sample_flag]
 
+#x<-cbind(X,y)
+#cor(x)
+#corrgram(x, order=TRUE, lower.panel=panel.shade,
+#  upper.panel=panel.pie, text.panel=panel.txt,
+#  main="Car Milage Data in PC2/PC1 Order")
 
-mr_contact_glm<-glm(y_train~.,X_train[,-7],family=binomial)
+mr_contact_glm<-glm(y_train~.,X_train,family=binomial)
 summary(mr_contact_glm)
-saveRDS(mr_contact_glm,"/Users/AlexAkimenko/Documents/работа/OSM model/mr_contact_glm.rds")
+saveRDS(mr_contact_glm,paste0(path,"/2_models/mr_contact_glm.rds"))
+# mr_contact_glm<-readRDS("/Users/AlexAkimenko/Documents/работа/Citi/OSM_model/2_models/mr_contact_glm.rds")
 
-y_test_pred<-predict(mr_contact_glm,X_test[,-7],type = "response")
+y_pred<-predict(mr_contact_glm,X,type = "response")
+#y_train_pred<-predict(mr_contact_glm,X_train,type = "response")
 
+MR$contact_pred<-y_pred
 
-actual=""
-pred=""
-act_date=""
-i=1
-for (day in unique(X_test$act_date)){
-  actual[i]<-sum(y_test[X_test$act_date==day])/length(y_test[X_test$act_date==day])
-  pred[i]<-mean(y_test_pred[X_test$act_date==day])
-  act_date[i]<-day
-  i=i+1
-}
+MR_ag<-MR[,.(contact_rate_act=mean(Contact),
+             contact_rate_pred=mean(contact_pred),
+             contact_int_act=sum(Contact)/length(unique(account_number)),
+             contact_int_pred=(mean(contact_pred)*.N)/length(unique(account_number))),by=.(act_date)]
 
+MR_ag$MAPE_contact_rate<-abs(MR_ag$contact_rate_act-MR_ag$contact_rate_pred)/MR_ag$contact_rate_act
+MR_ag$MAPE_contact_int<-abs(MR_ag$contact_int_act-MR_ag$contact_int_pred)/MR_ag$contact_int_act
 
-df_date<-data.frame(act_date=as.POSIXct(strptime(act_date, "%Y-%m-%d")),actual=as.numeric(actual),pred=as.numeric(pred))
-MAPE<-mean(abs(df_date$actual-df_date$pred)/df_date$actual)
+MAPE<-mean(MR_ag$MAPE_contact_int)
 MAPE
-# 0.134977 hour=as.factor+ n_attempt+n_attempt_s_phone+time_last_att+time_last_att_s_phone+ phone_type+mode+ListName+weekday
+# 0.08465604
 
-plot(df_date$act_date, df_date$actual)
-lines(df_date$act_date, df_date$pred)
+cor(MR_ag$contact_int_act,MR_ag$contact_int_pred)^2
+# 0.9675689
+
+plot(as.POSIXct(strptime(MR_ag$act_date, "%Y-%m-%d")), MR_ag$contact_int_act)
+lines(as.POSIXct(strptime(MR_ag$act_date, "%Y-%m-%d")), MR_ag$contact_int_pred)
+
+
+### RPC MODEL ####
+
+X<-data.frame(#n_attempt=MR$n_attempt,
+              n_attempt_s_phone=MR$n_attempt_s_phone,
+              connect_pred=MR$connect_pred,
+              contact_pred=MR$contact_pred,
+              #time_last_att=MR$time_last_att,
+              #time_last_att_s_phone=MR$time_last_att_s_phone,
+              hour=as.integer(MR$hour),
+              phone_type=as.factor(MR$phone_type),
+              mode=as.factor(MR$DialModeDesc),
+              weekday=as.factor(MR$weekday),
+              ListName=as.factor(MR$ListName))   
+
+y<-MR$RPC==1
+set.seed(1)
+sample_flag<-sample(1:nrow(X),nrow(X)*0.7)
+
+X_train <- X[sample_flag,]
+#X_test<-X[-sample_flag,]
+y_train<-y[sample_flag]
+#y_test<-y[-sample_flag]
+
+
+#x<-cbind(X,y)
+#cor(x)
+#corrgram(x, order=TRUE, lower.panel=panel.shade,
+#  upper.panel=panel.pie, text.panel=panel.txt,
+#  main="Car Milage Data in PC2/PC1 Order")
+
+mr_rpc_glm<-glm(y_train~.,X_train,family=binomial)
+summary(mr_rpc_glm)
+saveRDS(mr_rpc_glm,paste0(path,"/2_models/mr_rpc_glm.rds"))
+# mr_rpc_glm<-readRDS("/Users/AlexAkimenko/Documents/работа/Citi/OSM_model/2_models/mr_rpc_glm.rds")
+
+y_pred<-predict(mr_rpc_glm,X,type = "response")
+
+
+MR$rpc_pred<-y_pred
+
+MR_ag<-MR[,.(rpc_rate_act=mean(RPC),
+             rpc_rate_pred=mean(rpc_pred),
+             rpc_int_act=sum(RPC)/length(unique(account_number)),
+             rpc_int_pred=(mean(rpc_pred)*.N)/length(unique(account_number))),by=.(act_date)]
+
+MR_ag$error_rpc_rate<-(MR_ag$rpc_rate_act-MR_ag$rpc_rate_pred)/MR_ag$rpc_rate_act
+MR_ag$error_rpc_int<-(MR_ag$rpc_int_act-MR_ag$rpc_int_pred)/MR_ag$rpc_int_act
+summary(MR_ag)
+
+MAPE<-mean(abs(MR_ag$error_rpc_int))
+MAPE
+# 0.09087126
+
+R2<-cor(MR_ag$rpc_int_act,MR_ag$rpc_int_pred)^2
+R2
+# 0.9429951
+
+plot(as.POSIXct(strptime(MR_ag$act_date, "%Y-%m-%d")), MR_ag$rpc_int_act, 
+     xlab= "Date",
+     ylab = "RPC intencity", 
+     main = paste0("Actual RPC intencity vs predicted - MAPE=",round(MAPE*100,1),"%, R^2=",round(R2*100,1),"%"))
+lines(as.POSIXct(strptime(MR_ag$act_date, "%Y-%m-%d")), MR_ag$rpc_int_pred)
+
+
+
+### SUCCESS MODEL ####
+
+X<-data.frame(#n_attempt=MR$n_attempt,
+  n_attempt_s_phone=MR$n_attempt_s_phone,
+  connect_pred=MR$connect_pred,
+  contact_pred=MR$contact_pred,
+  rpc_pred=MR$rpc_pred,
+  #time_last_att=MR$time_last_att,
+  #time_last_att_s_phone=MR$time_last_att_s_phone,
+  hour=as.integer(MR$hour),
+  phone_type=as.factor(MR$phone_type),
+  mode=as.factor(MR$DialModeDesc),
+  weekday=as.factor(MR$weekday),
+  ListName=as.factor(MR$ListName))   
+
+y<-MR$Success==1
+set.seed(1)
+sample_flag<-sample(1:nrow(X),nrow(X)*0.7)
+
+X_train <- X[sample_flag,]
+#X_test<-X[-sample_flag,]
+y_train<-y[sample_flag]
+#y_test<-y[-sample_flag]
+
+
+#x<-cbind(X,y)
+#cor(x)
+#corrgram(x, order=TRUE, lower.panel=panel.shade,
+#  upper.panel=panel.pie, text.panel=panel.txt,
+#  main="Car Milage Data in PC2/PC1 Order")
+
+mr_success_glm<-glm(y_train~.,X_train,family=binomial)
+summary(mr_success_glm)
+saveRDS(mr_success_glm,paste0(path,"/2_models/mr_success_glm.rds"))
+# mr_success_glm<-readRDS("/Users/AlexAkimenko/Documents/работа/Citi/OSM_model/2_models/mr_success_glm.rds")
+
+y_pred<-predict(mr_success_glm,X,type = "response")
+
+
+MR$success_pred<-y_pred
+
+MR_ag<-MR[,.(success_rate_act=mean(Success),
+             success_rate_pred=mean(success_pred),
+             success_int_act=sum(Success)/length(unique(account_number)),
+             success_int_pred=(mean(success_pred)*.N)/length(unique(account_number))),by=.(act_date)]
+
+MR_ag$error_success_rate<-(MR_ag$success_rate_act-MR_ag$success_rate_pred)/MR_ag$success_rate_act
+MR_ag$error_success_int<-(MR_ag$success_int_act-MR_ag$success_int_pred)/MR_ag$success_int_act
+summary(MR_ag)
+
+MAPE<-mean(abs(MR_ag$error_success_int))
+MAPE
+# 0.09087126
+
+R2<-cor(MR_ag$success_int_act,MR_ag$success_int_pred)^2
+R2
+# 0.9429951
+
+plot(as.POSIXct(strptime(MR_ag$act_date, "%Y-%m-%d")), MR_ag$success_int_act, 
+     xlab= "Date",
+     ylab = "success intencity", 
+     main = paste0("Actual success intencity vs predicted - MAPE=",round(MAPE*100,1),"%, R^2=",round(R2*100,1),"%"))
+lines(as.POSIXct(strptime(MR_ag$act_date, "%Y-%m-%d")), MR_ag$success_int_pred)
